@@ -217,6 +217,10 @@
   <div class="toolbar toolbar-editor">
     <button class="btn secondary" id="viewToggleBtn">Vista previa / Imprimir</button>
     <button class="btn ghost" id="loadOtherDayBtn">Abrir otra fecha</button>
+    <button class="btn ghost" id="copyPrevBtn">Copiar día anterior</button>
+    <button class="btn ghost" id="exportBackupBtn">Exportar backup</button>
+    <button class="btn ghost" id="importBackupBtn">Importar backup</button>
+    <input type="file" id="importFileInput" accept="application/json" style="display:none;">
     <span class="save-status" id="saveStatus">Sin cambios</span>
   </div>
 
@@ -248,6 +252,49 @@
 
 </div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/8.10.1/firebase-app.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/8.10.1/firebase-firestore.js"></script>
+<script>
+  // Config de Firebase del proyecto "posicupos"
+  const firebaseConfig = {
+    apiKey: "AIzaSyCOmTzD10kEyVWcwXVZjr3o99cK8JgQYuk",
+    authDomain: "posicupos.firebaseapp.com",
+    projectId: "posicupos",
+    storageBucket: "posicupos.firebasestorage.app",
+    messagingSenderId: "420069933145",
+    appId: "1:420069933145:web:001f62cbad90c11c90f148"
+  };
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.firestore();
+  const POSIS_COLLECTION = 'posis_data';
+
+  // Shim de window.storage respaldado por Firestore, con la misma
+  // interfaz (get/set/delete/list) que usa el resto de la app.
+  window.storage = {
+    async get(key, shared){
+      const docSnap = await db.collection(POSIS_COLLECTION).doc(key).get();
+      if(!docSnap.exists) return null;
+      return { key, value: docSnap.data().value, shared: !!shared };
+    },
+    async set(key, value, shared){
+      await db.collection(POSIS_COLLECTION).doc(key).set({ value, updatedAt: Date.now() });
+      return { key, value, shared: !!shared };
+    },
+    async delete(key, shared){
+      await db.collection(POSIS_COLLECTION).doc(key).delete();
+      return { key, deleted: true, shared: !!shared };
+    },
+    async list(prefix, shared){
+      prefix = prefix || '';
+      const snap = await db.collection(POSIS_COLLECTION)
+        .orderBy(firebase.firestore.FieldPath.documentId())
+        .startAt(prefix)
+        .endAt(prefix + '\uf8ff')
+        .get();
+      return { keys: snap.docs.map(d => d.id), prefix, shared: !!shared };
+    }
+  };
+</script>
 <script>
 (function(){
   const HOLD_COUNT = 7;
@@ -815,6 +862,7 @@
       tab === 'buques' ? 'Posición de Buques' : tab === 'vagones' ? 'Posición de Vagones' : 'Cuadro de Cupos';
     document.getElementById('dayDateField').style.display = tab === 'cupos' ? 'none' : '';
     document.getElementById('weekDateField').style.display = tab === 'cupos' ? '' : 'none';
+    document.getElementById('copyPrevBtn').textContent = tab === 'cupos' ? 'Copiar semana anterior' : 'Copiar día anterior';
     setViewMode('edit');
     renderPrint();
   }
@@ -865,6 +913,105 @@
     renderEditorCupos(); renderPrint(); scheduleSave();
   });
 
+  // ---------- Copiar anterior ----------
+  document.getElementById('copyPrevBtn').addEventListener('click', async () => {
+    if(activeTab === 'buques'){
+      const prevDate = addDaysISO(currentDate, -1);
+      const hasData = buquesState.units.some(u => u.vessels.some(v => v.buque.trim() || v.estado.trim()));
+      if(hasData && !confirm('Esto va a reemplazar lo cargado hoy en Buques con lo de '+fmtDate(prevDate)+'. ¿Continuar?')) return;
+      let prev;
+      try{
+        const res = await window.storage.get(buquesKey(prevDate), true);
+        prev = res && res.value ? JSON.parse(res.value) : null;
+      }catch(e){ prev = null; }
+      if(!prev){ alert('No hay datos guardados para '+fmtDate(prevDate)+'.'); return; }
+      buquesState.units = prev.units.map(u => ({ ...u, id: cryptoId(), vessels: u.vessels.map(v => ({ ...v, id: cryptoId(), collapsed:false })) }));
+      renderEditorBuques(); renderPrint(); scheduleSave();
+    } else if(activeTab === 'vagones'){
+      const prevDate = addDaysISO(currentDate, -1);
+      const hasData = vagonesState.rows.some(r => WAGON_COLS.some(c => (r[c.key]||'').toString().trim()));
+      if(hasData && !confirm('Esto va a reemplazar lo cargado hoy en Vagones con lo de '+fmtDate(prevDate)+'. ¿Continuar?')) return;
+      let prev;
+      try{
+        const res = await window.storage.get(vagonesKey(prevDate), true);
+        prev = res && res.value ? JSON.parse(res.value) : null;
+      }catch(e){ prev = null; }
+      if(!prev){ alert('No hay datos guardados para '+fmtDate(prevDate)+'.'); return; }
+      vagonesState.rows = prev.rows.map(r => ({ ...r, id: cryptoId() }));
+      renderEditorVagones(); renderPrint(); scheduleSave();
+    } else {
+      const prevWeek = addDaysISO(currentWeekStart, -7);
+      const hasData = cuposState.exportadores.some(e => e.name.trim() || e.products.some(p => p.name.trim()));
+      if(hasData && !confirm('Esto va a reemplazar lo cargado en Cupos de esta semana con la semana del '+fmtDate(prevWeek)+'. ¿Continuar?')) return;
+      let prev;
+      try{
+        const res = await window.storage.get(cuposKey(prevWeek), true);
+        prev = res && res.value ? JSON.parse(res.value) : null;
+      }catch(e){ prev = null; }
+      if(!prev){ alert('No hay datos guardados para la semana del '+fmtDate(prevWeek)+'.'); return; }
+      cuposState.exportadores = prev.exportadores.map(e => ({ ...e, id: cryptoId(), products: e.products.map(p => ({ ...p, id: cryptoId(), values: [...p.values] })) }));
+      renderEditorCupos(); renderPrint(); scheduleSave();
+    }
+  });
+
+  // ---------- Backup: exportar / importar ----------
+  document.getElementById('exportBackupBtn').addEventListener('click', async () => {
+    setStatus('Preparando backup…', false);
+    try{
+      const bundle = {};
+      for(const prefix of ['posibuque:', 'posivagones:', 'poscupos:']){
+        const listRes = await window.storage.list(prefix, true);
+        const keys = (listRes && listRes.keys) || [];
+        for(const k of keys){
+          try{
+            const got = await window.storage.get(k, true);
+            if(got && got.value) bundle[k] = got.value;
+          }catch(e){}
+        }
+      }
+      const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const stamp = todayISO();
+      a.href = url; a.download = 'backup-posis-spsa-'+stamp+'.json';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setStatus('Backup descargado ✓', true);
+    }catch(e){
+      setStatus('No se pudo exportar el backup', false);
+    }
+  });
+
+  document.getElementById('importBackupBtn').addEventListener('click', () => {
+    document.getElementById('importFileInput').click();
+  });
+
+  document.getElementById('importFileInput').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if(!file) return;
+    if(!confirm('Esto va a restaurar todas las fechas/semanas incluidas en el archivo, pisando lo que ya esté guardado con esas mismas claves. ¿Continuar?')){
+      e.target.value = ''; return;
+    }
+    try{
+      const text = await file.text();
+      const bundle = JSON.parse(text);
+      const keys = Object.keys(bundle);
+      setStatus('Restaurando backup…', false);
+      for(const k of keys){
+        await window.storage.set(k, bundle[k], true);
+      }
+      setStatus('Backup restaurado ✓ ('+keys.length+' registros)', true);
+      // recargar la vista actual
+      await loadBuques(currentDate);
+      await loadVagones(currentDate);
+      await loadCupos(currentWeekStart);
+      renderEditorBuques(); renderEditorVagones(); renderEditorCupos(); renderPrint();
+    }catch(err){
+      setStatus('No se pudo leer el archivo de backup', false);
+    }
+    e.target.value = '';
+  });
+
   document.getElementById('addUnitBtn').addEventListener('click', () => {
     buquesState.units.push(emptyUnit('UNIDAD '+(buquesState.units.length+1)));
     renderEditorBuques(); renderPrint(); scheduleSave();
@@ -890,6 +1037,7 @@
   (async function init(){
     document.getElementById('posiDate').value = currentDate;
     document.getElementById('weekStart').value = currentWeekStart;
+    document.getElementById('copyPrevBtn').textContent = 'Copiar día anterior';
     await loadBuques(currentDate);
     await loadVagones(currentDate);
     await loadCupos(currentWeekStart);
