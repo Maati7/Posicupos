@@ -858,10 +858,39 @@
       html += '<table class="pv-table"><tr><th>Buque</th><th>Estado</th><th>Tipo</th><th>Destino</th><th>Agencia</th><th>Plano de carga</th></tr>';
       vessels.forEach(v => {
         html += '<tr><td><strong>'+cell(v.buque)+'</strong></td><td>'+cell(v.estado)+'</td><td>'+cell(v.tipo)+'</td><td>'+cell(v.destino)+'</td><td>'+cell(v.agencia)+'</td><td>'+cell(v.planoCarga)+'</td></tr>';
+        const holdCells = v.holds.map((val,i) => '#'+(i+1)+(val && val.toString().trim() ? ': '+esc(val) : ''));
+        const anyHold = v.holds.some(val => val && val.toString().trim());
+        html += '<tr class="pv-holdrow"><td colspan="6"><em>Bodegas:</em> ' + (anyHold ? holdCells.join(' &nbsp; ') : '<span class="empty">sin datos de bodegas</span>') + '</td></tr>';
       });
       html += '</table>';
     });
     if(!anyVessel) html += '<div class="no-vessels">Sin buques cargados.</div>';
+
+    // ---- Mini resumen de Cupos (semana) ----
+    html += '<div class="print-subhead">📊 Cupos de la semana ('+fmtDate(cuposState.weekStart)+' al '+fmtDate(addDaysISO(cuposState.weekStart,6))+')</div>';
+    const expRows = cuposState.exportadores.filter(exp => exp.name.trim());
+    const prodRows = productAggregates();
+    if(expRows.length === 0 && prodRows.length === 0){
+      html += '<div class="no-vessels">Sin cupos cargados para esta semana.</div>';
+    } else {
+      html += '<table class="pv-table cupos-summary"><tr><th>Exportador</th><th>Cupo semanal</th></tr>';
+      let expWeekTotal = 0;
+      expRows.forEach(exp => {
+        const t = exportadorDayTotals(exp).reduce((a,b) => a+b, 0);
+        expWeekTotal += t;
+        html += '<tr><td>'+esc(exp.name)+'</td><td>'+t+'</td></tr>';
+      });
+      html += '<tr class="total-row"><td>Total cupos de la semana</td><td>'+expWeekTotal+'</td></tr>';
+      html += '</table>';
+      if(prodRows.length){
+        html += '<table class="pv-table cupos-summary"><tr><th>Producto</th><th>Cupo semanal</th></tr>';
+        prodRows.forEach(a => {
+          const t = a.totals.reduce((x,y) => x+y, 0);
+          html += '<tr><td>'+esc(a.label)+'</td><td>'+t+'</td></tr>';
+        });
+        html += '</table>';
+      }
+    }
 
     // ---- Vagones (compacto) ----
     html += '<div class="print-subhead">🚃 Posición de Vagones</div>';
