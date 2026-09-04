@@ -866,31 +866,43 @@
     });
     if(!anyVessel) html += '<div class="no-vessels">Sin buques cargados.</div>';
 
-    // ---- Mini resumen de Cupos (semana) ----
-    html += '<div class="print-subhead">📊 Cupos de la semana ('+fmtDate(cuposState.weekStart)+' al '+fmtDate(addDaysISO(cuposState.weekStart,6))+')</div>';
+    // ---- Mini resumen de Cupos (desde el día del resumen en adelante) ----
+    let startIdx = Math.round((new Date(buquesState.date+'T00:00:00Z') - new Date(cuposState.weekStart+'T00:00:00Z')) / 86400000);
+    if(startIdx < 0 || startIdx > 6) startIdx = 0; // si no coincide la semana, mostramos la semana completa cargada
+    html += '<div class="print-subhead">📊 Cupos desde el '+fmtDate(buquesState.date)+' hasta el '+fmtDate(addDaysISO(cuposState.weekStart,6))+'</div>';
+    const miniDayHeaders = DAY_NAMES.slice(startIdx).map(d => d.slice(0,3));
     const expRows = cuposState.exportadores.filter(exp => exp.name.trim());
     const prodRows = productAggregates();
     if(expRows.length === 0 && prodRows.length === 0){
       html += '<div class="no-vessels">Sin cupos cargados para esta semana.</div>';
     } else {
-      html += '<table class="pv-table cupos-summary"><tr><th>Exportador</th><th>Cupo semanal</th></tr>';
-      let expWeekTotal = 0;
+      html += '<table class="pv-table cupos-summary"><tr><th>Exportador</th>' + miniDayHeaders.map(h=>'<th>'+h+'</th>').join('') + '<th>Total</th></tr>';
+      const expDayGrand = Array(7-startIdx).fill(0);
       expRows.forEach(exp => {
-        const t = exportadorDayTotals(exp).reduce((a,b) => a+b, 0);
-        expWeekTotal += t;
-        html += '<tr><td>'+esc(exp.name)+'</td><td>'+t+'</td></tr>';
+        const tot = exportadorDayTotals(exp).slice(startIdx);
+        tot.forEach((t,i) => expDayGrand[i] += t);
+        const weekTotal = tot.reduce((a,b) => a+b, 0);
+        html += '<tr><td>'+esc(exp.name)+'</td>' + tot.map(t => '<td>'+t+'</td>').join('') + '<td><strong>'+weekTotal+'</strong></td></tr>';
       });
-      html += '<tr class="total-row"><td>Total cupos de la semana</td><td>'+expWeekTotal+'</td></tr>';
+      const expGrandTotal = expDayGrand.reduce((a,b) => a+b, 0);
+      html += '<tr class="total-row"><td>Cupos x día</td>' + expDayGrand.map(t => '<td>'+t+'</td>').join('') + '<td>'+expGrandTotal+'</td></tr>';
       html += '</table>';
       if(prodRows.length){
-        html += '<table class="pv-table cupos-summary"><tr><th>Producto</th><th>Cupo semanal</th></tr>';
+        html += '<table class="pv-table cupos-summary"><tr><th>Producto</th>' + miniDayHeaders.map(h=>'<th>'+h+'</th>').join('') + '<th>Total</th></tr>';
+        const prodDayGrand = Array(7-startIdx).fill(0);
         prodRows.forEach(a => {
-          const t = a.totals.reduce((x,y) => x+y, 0);
-          html += '<tr><td>'+esc(a.label)+'</td><td>'+t+'</td></tr>';
+          const tot = a.totals.slice(startIdx);
+          tot.forEach((t,i) => prodDayGrand[i] += t);
+          const weekTotal = tot.reduce((x,y) => x+y, 0);
+          html += '<tr><td>'+esc(a.label)+'</td>' + tot.map(t => '<td>'+t+'</td>').join('') + '<td><strong>'+weekTotal+'</strong></td></tr>';
         });
+        const prodGrandTotal = prodDayGrand.reduce((a,b) => a+b, 0);
+        html += '<tr class="total-row"><td>TOTALES</td>' + prodDayGrand.map(t => '<td>'+t+'</td>').join('') + '<td>'+prodGrandTotal+'</td></tr>';
         html += '</table>';
       }
+
     }
+
 
     // ---- Vagones (compacto) ----
     html += '<div class="print-subhead">🚃 Posición de Vagones</div>';
