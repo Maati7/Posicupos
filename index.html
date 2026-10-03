@@ -85,6 +85,16 @@
   .vessel-head input.vessel-name::placeholder{color:#a9b4bd;font-weight:400;}
   .vessel-head input.vessel-estado{font-size:12px;border:1px solid var(--line);border-radius:4px;padding:5px 8px;color:var(--ink-soft);width:220px;font-family:inherit;}
 
+  .vessel-move{display:flex;gap:4px;}
+  .vessel-move button{
+    font-family:inherit;font-size:13px;line-height:1;width:32px;height:30px;padding:0;
+    border:1px solid var(--line);border-radius:4px;background:var(--paper-2);color:var(--navy);cursor:pointer;
+  }
+  .vessel-move button:hover{background:#eef1f4;}
+  .vessel-move button:active{transform:scale(0.94);}
+  .vessel-move button:disabled{opacity:0.3;cursor:default;transform:none;}
+  .vessel.just-moved{animation:movedFlash 1.2s ease;}
+  @keyframes movedFlash{0%{background:#f3e3c4;box-shadow:0 0 0 3px rgba(184,134,59,0.45);}100%{background:#fdfcfa;box-shadow:none;}}
   .vessel-fields{padding:14px 16px 16px;display:none;}
   .vessel-fields.open{display:block;}
 
@@ -200,6 +210,8 @@
     .masthead{flex-direction:column;align-items:flex-start;}
     .field-grid{grid-template-columns:1fr 1fr;}
     .holds{grid-template-columns:repeat(4,1fr);}
+    .vessel-head{flex-wrap:wrap;}
+    .vessel-head input.vessel-estado{width:100%;order:5;}
   }
 </style>
 </head>
@@ -442,8 +454,23 @@
     return wrap;
   }
 
+  let lastMovedVesselId = null;
+  function moveVessel(unit, v, dir){
+    const i = unit.vessels.findIndex(x => x.id === v.id);
+    const j = i + dir;
+    if(i < 0 || j < 0 || j >= unit.vessels.length) return;
+    [unit.vessels[i], unit.vessels[j]] = [unit.vessels[j], unit.vessels[i]];
+    lastMovedVesselId = v.id;
+    renderEditorBuques(); renderPrint(); scheduleSave();
+    lastMovedVesselId = null;
+  }
+
   function vesselNode(unit, v){
     const box = document.createElement('div'); box.className = 'vessel';
+    if(v.id === lastMovedVesselId){
+      box.classList.add('just-moved');
+      requestAnimationFrame(() => box.scrollIntoView({ block:'nearest', behavior:'smooth' }));
+    }
     const head = document.createElement('div'); head.className = 'vessel-head' + (v.collapsed ? ' collapsed' : '');
     const chev = document.createElement('span'); chev.className = 'chev'; chev.textContent = '▾';
     head.appendChild(chev);
@@ -467,7 +494,19 @@
       renderEditorBuques(); renderPrint(); scheduleSave();
     });
 
-    head.append(nameInput, estadoInput, delBtn);
+    const idx = unit.vessels.findIndex(x => x.id === v.id);
+    const moveWrap = document.createElement('div'); moveWrap.className = 'vessel-move';
+    const upBtn = document.createElement('button');
+    upBtn.type = 'button'; upBtn.textContent = '▲'; upBtn.title = 'Subir buque';
+    upBtn.disabled = idx <= 0;
+    upBtn.addEventListener('click', e => { e.stopPropagation(); moveVessel(unit, v, -1); });
+    const downBtn = document.createElement('button');
+    downBtn.type = 'button'; downBtn.textContent = '▼'; downBtn.title = 'Bajar buque';
+    downBtn.disabled = idx >= unit.vessels.length - 1;
+    downBtn.addEventListener('click', e => { e.stopPropagation(); moveVessel(unit, v, 1); });
+    moveWrap.append(upBtn, downBtn);
+
+    head.append(nameInput, estadoInput, moveWrap, delBtn);
     head.addEventListener('click', () => { v.collapsed = !v.collapsed; renderEditorBuques(); });
     box.appendChild(head);
 
