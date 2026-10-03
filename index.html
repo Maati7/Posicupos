@@ -106,9 +106,10 @@
   .field textarea{resize:vertical;min-height:38px;}
   .field input:focus, .field select:focus, .field textarea:focus{outline:2px solid var(--brass);outline-offset:0;border-color:var(--brass);}
 
-  .holds{display:grid;grid-template-columns:repeat(7,1fr);gap:8px;margin-bottom:4px;}
+  .holds{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px;margin-bottom:4px;}
+  .holds .field{min-width:0;}
   .holds .field label{text-align:center;}
-  .holds .field input{text-align:center;}
+  .holds .field input{text-align:center;width:100%;min-width:0;box-sizing:border-box;}
 
   .add-vessel-btn{display:block;width:100%;padding:10px;border:1.5px dashed var(--line);border-radius:var(--radius);background:transparent;color:var(--steel);font-family:inherit;font-size:13px;font-weight:600;cursor:pointer;}
   .add-vessel-btn:hover{border-color:var(--brass);color:var(--brass);background:#fbf6ec;}
@@ -209,7 +210,7 @@
   @media (max-width:640px){
     .masthead{flex-direction:column;align-items:flex-start;}
     .field-grid{grid-template-columns:1fr 1fr;}
-    .holds{grid-template-columns:repeat(4,1fr);}
+    .holds{grid-template-columns:repeat(4,minmax(0,1fr));}
     .vessel-head{flex-wrap:wrap;}
     .vessel-head input.vessel-estado{width:100%;order:5;}
   }
@@ -489,6 +490,9 @@
     delBtn.className = 'btn danger'; delBtn.textContent = '✕'; delBtn.title = 'Eliminar buque';
     delBtn.addEventListener('click', e => {
       e.stopPropagation();
+      const hasData = Object.keys(v).some(k => k !== 'id' && k !== 'collapsed' &&
+        (Array.isArray(v[k]) ? v[k].some(x => (x||'').toString().trim()) : (v[k]||'').toString().trim()));
+      if(hasData && !confirm('¿Eliminar el buque "' + (v.buque.trim() || 'sin nombre') + '"?')) return;
       unit.vessels = unit.vessels.filter(x => x.id !== v.id);
       if(unit.vessels.length === 0) unit.vessels.push(emptyVessel());
       renderEditorBuques(); renderPrint(); scheduleSave();
@@ -964,19 +968,37 @@
     const el = document.getElementById('saveStatus');
     el.textContent = text; el.className = 'save-status' + (ok ? ' ok' : '');
   }
+  // Pestañas con cambios sin guardar. Se marca la pestaña donde se editó,
+  // así el guardado no depende de qué pestaña esté abierta cuando se dispara.
+  const pendingSaves = new Set();
   function scheduleSave(){
+    if(activeTab === 'buques' || activeTab === 'vagones' || activeTab === 'cupos') pendingSaves.add(activeTab);
     setStatus('Editando…', false);
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(async () => {
-      setStatus('Guardando…', false);
-      try{
-        if(activeTab === 'buques') await saveBuques();
-        else if(activeTab === 'vagones') await saveVagones();
-        else await saveCupos();
-        setStatus('Guardado ✓ (visible para todos)', true);
-      }catch(e){ setStatus('No se pudo guardar', false); }
-    }, 600);
+    saveTimer = setTimeout(flushSave, 600);
   }
+  // Guarda ya mismo todo lo pendiente (se usa antes de cambiar de pestaña o fecha).
+  async function flushSave(){
+    clearTimeout(saveTimer); saveTimer = null;
+    if(pendingSaves.size === 0) return;
+    const tabs = [...pendingSaves];
+    pendingSaves.clear();
+    setStatus('Guardando…', false);
+    try{
+      for(const t of tabs){
+        if(t === 'buques') await saveBuques();
+        else if(t === 'vagones') await saveVagones();
+        else if(t === 'cupos') await saveCupos();
+      }
+      setStatus('Guardado ✓ (visible para todos)', true);
+    }catch(e){
+      tabs.forEach(t => pendingSaves.add(t));
+      setStatus('No se pudo guardar', false);
+    }
+  }
+  // Si se cierra la pestaña o se pasa la app a segundo plano, intentar guardar lo pendiente.
+  window.addEventListener('pagehide', () => { flushSave(); });
+  document.addEventListener('visibilitychange', () => { if(document.visibilityState === 'hidden') flushSave(); });
 
   function setViewMode(mode){
     viewMode = mode;
@@ -999,6 +1021,7 @@
   }
 
   async function switchTab(tab){
+    flushSave();
     activeTab = tab;
     document.getElementById('tabBuquesBtn').classList.toggle('active', tab === 'buques');
     document.getElementById('tabVagonesBtn').classList.toggle('active', tab === 'vagones');
@@ -1029,6 +1052,7 @@
   document.getElementById('posiDate').addEventListener('change', async (e) => {
     const newDate = e.target.value;
     if(!newDate) return;
+    await flushSave();
     currentDate = newDate;
     await loadBuques(newDate);
     await loadVagones(newDate);
@@ -1038,6 +1062,7 @@
   document.getElementById('weekStart').addEventListener('change', async (e) => {
     const newWeek = sundayOf(e.target.value);
     e.target.value = newWeek;
+    await flushSave();
     currentWeekStart = newWeek;
     await loadCupos(newWeek);
     renderEditorCupos(); renderPrint();
@@ -1143,6 +1168,7 @@
     if(!confirm('Esto va a restaurar todas las fechas/semanas incluidas en el archivo, pisando lo que ya esté guardado con esas mismas claves. ¿Continuar?')){
       e.target.value = ''; return;
     }
+    await flushSave();
     try{
       const text = await file.text();
       const bundle = JSON.parse(text);
