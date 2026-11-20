@@ -193,6 +193,17 @@ table.et tfoot td{font-weight:700;background:var(--surface-2);padding:8px 6px;bo
 .day b{display:block;font-size:.92rem}
 .day small{color:var(--muted);font-size:.8rem}
 .day .ftag{position:absolute;top:8px;right:9px;font-size:.66rem;font-weight:800;letter-spacing:.05em;color:#5B4300;background:var(--feriado);border-radius:5px;padding:1px 6px}
+.day .btag{position:absolute;bottom:8px;right:9px;font-size:.7rem;font-weight:800;color:var(--danger,#c0392b)}
+.borr .card-h{flex-wrap:wrap;gap:4px 12px}
+.borr select.in{min-width:98px}
+.borr .bq{font-weight:700;color:var(--danger,#c0392b)}
+.bfoot{display:grid;gap:6px;margin:12px 4px 2px;font-size:.84rem}
+.bfoot>div{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.bfoot small{color:var(--muted);min-width:96px;font-weight:600}
+.bchip{border:1px solid var(--line);border-radius:999px;padding:2px 9px;background:var(--surface)}
+.bchip.z{opacity:.5}
+.bchip.tot{border-color:var(--accent)}
+.summary .brow td{color:var(--danger,#c0392b)}
 .day.fer{background:var(--feriado-soft);border-color:var(--feriado)}
 .day.today{box-shadow:inset 0 0 0 2px var(--accent)}
 .dayopts{display:flex;align-items:center;gap:16px;margin:-6px 0 16px;color:var(--muted);font-size:.85rem;flex-wrap:wrap}
@@ -550,6 +561,7 @@ const newVessel = () => ({ id:uid(), buque:"", estado:"", tipo:"Exportación", e
 const newUnit = name => ({ id:uid(), name:name || "UNIDAD", note:"", vessels:[] });
 const newWagon = () => { const r = { id:uid() }; WAGON_COLS.forEach(c => r[c.key] = ""); return r; };
 const newProduct = name => ({ id:uid(), name:name || "", values:Array(7).fill(""), nota:"" });
+const newBorr = d => ({ id:uid(), d:String(d ?? 0), hora:"", acum:"", exp:"", prod:"", cant:"", nota:"" });
 const newExp = name => ({ id:uid(), name:name || "", products:[newProduct()], inactivo:false, aparte:false });
 
 function fixBuques(o, date){
@@ -589,6 +601,7 @@ function fixCupos(o, week){
     if (!n.products.length) n.products = [newProduct()];
     return n;
   }).filter(e => trim(e.name) || e.products.some(p => trim(p.name) || p.values.some(v => trim(v))));
+  o.borrados = (Array.isArray(o.borrados) ? o.borrados : []).map(b => Object.assign(newBorr(), b, { id: b.id || uid(), d: String(b.d ?? 0) }));
   o.feriados = Array.from({ length:7 }, (_, i) => !!(o.feriados && o.feriados[i]));
   o.domingo = !!o.domingo || o.exportadores.some(e => e.products.some(p => num(p.values[6])));
   return o;
@@ -1118,13 +1131,46 @@ function prodAgg(C){
   return [...map.values()];
 }
 
+// Cupos borrados (por hora, según el acumulado de camiones)
+const fmtHora = v => { const m = String(v || "").trim().match(/^(\d{1,2})[:.,hH ]?(\d{2})?$/); if (!m) return String(v || "").trim(); const h = +m[1], mi = +(m[2] || 0); return h < 24 && mi < 60 ? String(h).padStart(2, "0") + ":" + String(mi).padStart(2, "0") : String(v).trim(); };
+const borrList = C => C.borrados.filter(b => num(b.cant) || trim(b.exp) || trim(b.prod) || trim(b.hora) || num(b.acum));
+const borrSorted = C => C.borrados.map((b, i) => ({ b, i })).sort((x, y) => (+x.b.d - +y.b.d) || (fmtHora(x.b.hora) || "99").localeCompare(fmtHora(y.b.hora) || "99") || x.i - y.i).map(x => x.b);
+function borrPorDia(C){ const t = Array(7).fill(0); C.borrados.forEach(b => t[+b.d] += num(b.cant)); return t; }
+function borrGroup(C, f){ const m = new Map(); C.borrados.forEach(b => { const n = num(b.cant); if (!n) return; const k = (f === "prod" ? prodKey(b[f]) : trim(b[f]).toUpperCase()) || "Todos"; m.set(k, (m.get(k) || 0) + n); }); return [...m.entries()].sort((a, b) => b[1] - a[1]); }
+function borrFootHTML(C){
+  const nd = nDays(C), t = borrPorDia(C), tot = t.slice(0, nd).reduce((a, b) => a + b, 0);
+  const chips = (arr) => arr.map(([k, n]) => `<span class="bchip"><b>${fmtN(n)}</b> ${esc(k)}</span>`).join("") || `<span class="muted">—</span>`;
+  return `<div class="bfoot"><div><small>Por día</small>${Array.from({ length:nd }, (_, d) => `<span class="bchip${t[d] ? "" : " z"}">${DIAS_C[d]} <b>${fmtN(t[d])}</b></span>`).join("")}<span class="bchip tot">Semana <b>${fmtN(tot)}</b></span></div>
+    <div><small>Por exportador</small>${chips(borrGroup(C, "exp"))}</div><div><small>Por cereal</small>${chips(borrGroup(C, "prod"))}</div></div>`;
+}
+function borradosHTML(C){
+  const nd = nDays(C), list = borrSorted(C);
+  const dayOpts = sel => Array.from({ length:nd }, (_, d) => `<option value="${d}"${+sel === d ? " selected" : ""}>${DIAS_C[d]} ${fmtDs(addDays(C.weekStart, d))}</option>`).join("");
+  const rows = list.map(b => { reg(b); const pc = prodColor(b.prod);
+    return `<tr><td><select class="in" data-o="${b.id}" data-f="d" aria-label="Día">${dayOpts(b.d)}</select></td>
+      <td style="min-width:70px"><input class="in hora" data-o="${b.id}" data-f="hora" value="${esc(b.hora)}" placeholder="hh:mm" inputmode="numeric" autocomplete="off" aria-label="Hora"></td>
+      <td style="min-width:80px"><input class="in num" data-o="${b.id}" data-f="acum" value="${esc(b.acum)}" placeholder="0" inputmode="numeric" autocomplete="off" aria-label="Camiones acumulados"></td>
+      <td style="min-width:130px"><input class="in" data-o="${b.id}" data-f="exp" value="${esc(b.exp)}" list="dl-exportador" placeholder="Todos" autocomplete="off" aria-label="Exportador"></td>
+      <td style="min-width:100px"><input class="in prodtxt" data-o="${b.id}" data-f="prod" value="${esc(b.prod)}" list="dl-mercaderia" placeholder="Todos" autocomplete="off"${pc ? ` style="color:${pc}"` : ""} aria-label="Cereal"></td>
+      <td style="min-width:70px"><input class="in num bq" data-o="${b.id}" data-f="cant" value="${esc(b.cant)}" placeholder="0" inputmode="numeric" autocomplete="off" aria-label="Cupos borrados"></td>
+      <td style="min-width:110px"><input class="in" data-o="${b.id}" data-f="nota" value="${esc(b.nota)}" autocomplete="off" aria-label="Nota"></td>
+      <td><button class="x" type="button" data-act="delBorr" data-b="${b.id}" title="Quitar">×</button></td></tr>`; }).join("");
+  return `<section class="card exp borr" id="borr"><div class="card-h"><b>Cupos borrados</b><span class="muted" style="font-size:.84rem">Cuántos se borraron, a qué hora y con cuántos camiones acumulados. Exportador o cereal vacío = a todos.</span></div>
+    <div class="card-b">${rows ? `<div class="tw"><table class="et">
+      <thead><tr><th>Día</th><th>Hora</th><th class="n">Camiones acum.</th><th>Exportador</th><th>Cereal</th><th class="n">Borrados</th><th>Nota</th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table></div>` : `<div class="empty-note" style="padding:6px 4px 10px">Sin cupos borrados esta semana.</div>`}
+    <button class="addline" type="button" data-act="addBorr" style="margin:6px 4px 0">+ Borrado</button>
+    <div id="borrFoot">${borrList(C).length ? borrFootHTML(C) : ""}</div></div></section>`;
+}
+
 function cuposHTML(){
   const C = S.cupos, nd = nDays(C), today = todayISO();
   const act = expActive(C), main = act.filter(e => !e.aparte), ap = act.filter(e => e.aparte), ina = C.exportadores.filter(e => e.inactivo);
+  const bd = borrPorDia(C);
   let h = `<div class="days" style="--nd:${nd}">${Array.from({ length:nd }, (_, i) => {
     const d = addDays(C.weekStart, i);
     return `<button class="day${C.feriados[i] ? " fer" : ""}${d === today ? " today" : ""}" type="button" data-act="feriado" data-i="${i}" title="${C.feriados[i] ? "Quitar feriado" : "Marcar como feriado"}">
-      <b>${DIAS[i]}</b><small>${fmtD(d)}</small>${C.feriados[i] ? `<span class="ftag">FERIADO</span>` : ""}</button>`;
+      <b>${DIAS[i]}</b><small>${fmtD(d)}</small>${C.feriados[i] ? `<span class="ftag">FERIADO</span>` : ""}<span class="btag" id="btag-${i}"${bd[i] ? "" : " hidden"} title="Cupos borrados">−${fmtN(bd[i])}</span></button>`;
   }).join("")}</div>
   <div class="dayopts"><span>Tocá un día para marcarlo como feriado.</span>
     <label><input type="checkbox" data-act="domingo" ${C.domingo ? "checked" : ""}> Incluir domingo</label></div>`;
@@ -1133,6 +1179,7 @@ function cuposHTML(){
   h += `<button class="add-vessel" type="button" data-act="addExp" style="margin:4px 0 6px">+ Agregar exportador</button>`;
   if (ina.length) h += `<div class="inactivos"><span>Sin cupos esta semana:</span>${ina.map(e => { reg(e); return `<button type="button" data-act="activar" data-e="${e.id}" title="Volver a activar">${esc(e.name || "sin nombre")} ↺</button>`; }).join("")}</div>`;
   h += `<div class="seclabel">Resumen de la semana</div><div id="cupSummary">${summaryHTML(C)}</div>`;
+  h += `<div class="seclabel">Cupos borrados</div>${borradosHTML(C)}`;
   if (ap.length) h += `<div class="seclabel">Aparte (no suman en el resumen)</div><div class="exgrid">${ap.map((e, i) => expHTML(e, nd, i, ap.length)).join("")}</div>`;
   return h;
 }
@@ -1172,13 +1219,14 @@ function summaryHTML(C){
   const nd = nDays(C), agg = prodAgg(C), fer = C.feriados;
   if (!agg.length) return `<div class="card"><div class="card-b empty-note">Cuando cargues cupos, acá se suman por producto y por día.</div></div>`;
   const tot = Array(nd).fill(0); agg.forEach(a => a.t.forEach((x, i) => tot[i] += x));
+  const bt = borrPorDia(C).slice(0, nd);
   const exps = expActive(C).filter(e => !e.aparte && trim(e.name));
   const head = `<tr><th></th>${Array.from({ length:nd }, (_, d) => `<th class="n${fer[d] ? " fer" : ""}">${DIAS_C[d]} ${fmtDs(addDays(C.weekStart, d)).slice(0, 2)}</th>`).join("")}<th class="n">Semana</th></tr>`;
   const row = (lbl, t, dot) => `<tr><td>${dot ? `<span class="pdot" style="--pc:${dot}"></span>` : ""}<b>${esc(lbl)}</b></td>${t.map((x, d) => `<td class="n${fer[d] ? " fer" : ""}">${fmtN(x)}</td>`).join("")}<td class="n"><b>${fmtN(t.reduce((a, b) => a + b, 0))}</b></td></tr>`;
   return `<div class="exgrid summary">
     <section class="card exp"><div class="card-h"><b>Camiones por producto</b></div><div class="card-b"><div class="tw"><table class="et">
       <thead>${head}</thead><tbody>${agg.map(a => row(a.label, a.t, prodColor(a.label) || "var(--muted)")).join("")}</tbody>
-      <tfoot>${row("Totales", tot).replace(/<b>/g, "").replace(/<\/b>/g, "")}</tfoot></table></div></div></section>
+      <tfoot>${row("Totales", tot).replace(/<b>/g, "").replace(/<\/b>/g, "")}${bt.some(x => x) ? row("Borrados", bt.map(x => -x)).replace("<tr>", '<tr class="brow">') + row("Netos", tot.map((x, d) => x - bt[d])) : ""}</tfoot></table></div></div></section>
     <section class="card exp"><div class="card-h"><b>Camiones por exportador</b></div><div class="card-b"><div class="tw"><table class="et">
       <thead>${head}</thead><tbody>${exps.map(e => row(e.name, expTotals(e, nd))).join("")}</tbody></table></div></div></section>
   </div>`;
@@ -1199,9 +1247,25 @@ function refreshCupos(el){
     }
   }
   const s = $("cupSummary"); if (s) s.innerHTML = summaryHTML(C);
+  if (el.closest("#borr")){
+    const f = $("borrFoot"); if (f) f.innerHTML = borrList(C).length ? borrFootHTML(C) : "";
+    const bd = borrPorDia(C); bd.forEach((n, i) => { const t = $("btag-" + i); if (t){ t.hidden = !n; t.textContent = "−" + fmtN(n); } });
+  }
 }
 const expById = id => S.cupos.exportadores.find(e => e.id === id);
 const ACT_C = {
+  addBorr(){
+    const C = S.cupos, nd = nDays(C), ti = Math.round((dOf(todayISO()) - dOf(C.weekStart)) / 86400000);
+    const last = C.borrados[C.borrados.length - 1];
+    const b = newBorr(ti >= 0 && ti < nd ? ti : last ? last.d : 0);
+    const h = new Date(); b.hora = String(h.getHours()).padStart(2, "0") + ":" + String(h.getMinutes()).padStart(2, "0");
+    C.borrados.push(b); scheduleSave("cupos"); rerender(`[data-o="${b.id}"][data-f="acum"]`);
+  },
+  delBorr(el){
+    const C = S.cupos, b = C.borrados.find(x => x.id === el.dataset.b); if (!b) return;
+    if (num(b.cant) && !confirm("¿Quitar este registro de cupos borrados?")) return;
+    C.borrados = C.borrados.filter(x => x !== b); scheduleSave("cupos"); rerender();
+  },
   feriado(el){ const i = +el.dataset.i; S.cupos.feriados[i] = !S.cupos.feriados[i]; scheduleSave("cupos"); rerender(); },
   domingo(el){ S.cupos.domingo = el.checked; scheduleSave("cupos"); rerender(); },
   addExp(){ const e = newExp(""); S.cupos.exportadores.push(e); scheduleSave("cupos"); rerender(`[data-o="${e.id}"][data-f="name"]`); },
@@ -1623,6 +1687,42 @@ async function downloadWB(wb, filename){
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 4000);
 }
+function sheetBorrados(wb, C){
+  const nd = nDays(C), list = borrSorted(C).filter(b => num(b.cant) || num(b.acum));
+  if (!list.length) return;
+  const ws = wb.addWorksheet("BORRADOS SEM " + semanaNro(C.weekStart), { views:[{ showGridLines:false, state:"frozen", ySplit:3 }], pageSetup:{ orientation:"landscape", fitToPage:true, fitToWidth:1, fitToHeight:0 } });
+  const W = [12, 10, 8, 14, 22, 14, 12, 30]; W.forEach((w, i) => ws.getColumn(i + 2).width = w); ws.getColumn(1).width = 2;
+  const H = { font:{ name:"Aptos", size:11, bold:true, color:{ argb:"FFFFFFFF" } }, fill:"215F9A", al:C_CENTER };
+  const A = { font:{ name:"Aptos", size:11 }, al:{ horizontal:"center", vertical:"middle" } };
+  XL.merge(ws, 1, 2, 1, 9, `CUPOS BORRADOS · SEMANA ${semanaNro(C.weekStart)} (${fmtDs(C.weekStart)} al ${fmtDs(addDays(C.weekStart, nd - 1))})`, { font:{ name:"Aptos", size:14, bold:true }, fill:"FBE3D6", al:C_CENTER });
+  ws.getRow(1).height = 24;
+  ["Fecha","Día","Hora","Camiones acumulados","Exportador","Cereal","Cupos borrados","Nota"].forEach((t, i) => XL.put(ws, 3, i + 2, t, H));
+  ws.getRow(3).height = 30;
+  let r = 4;
+  list.forEach(b => {
+    const d = +b.d;
+    XL.put(ws, r, 2, XL.dateVal(addDays(C.weekStart, d)), Object.assign({ fmt:"dd/mm/yyyy" }, A));
+    XL.put(ws, r, 3, DIAS[d], A); XL.put(ws, r, 4, fmtHora(b.hora), A);
+    XL.put(ws, r, 5, trim(b.acum) ? num(b.acum) : "", A);
+    XL.put(ws, r, 6, trim(b.exp) || "TODOS", A); XL.put(ws, r, 7, prodKey(b.prod) || "TODOS", A);
+    XL.put(ws, r, 8, num(b.cant), { font:{ name:"Aptos", size:11, bold:true }, al:{ horizontal:"center", vertical:"middle" } });
+    XL.put(ws, r, 9, trim(b.nota), { font:{ name:"Aptos", size:11 } });
+    r++;
+  });
+  XL.grid(ws, 3, 2, r - 1, 9); XL.box(ws, 3, 2, r - 1, 9, XL.med);
+  XL.put(ws, r, 7, "TOTAL", { font:{ name:"Aptos", size:11, bold:true }, al:{ horizontal:"right" } });
+  XL.put(ws, r, 8, { formula:`SUM(H4:H${r - 1})`, result:list.reduce((a, b) => a + num(b.cant), 0) }, { font:{ name:"Aptos", size:11, bold:true }, fill:"C2F1C8", al:{ horizontal:"center" } });
+  r += 2;
+  // Totales por día
+  XL.put(ws, r, 2, "Por día", H); XL.put(ws, r, 3, "Borrados", H);
+  const bd = borrPorDia(C); const r0 = r + 1;
+  for (let d = 0; d < nd; d++){ r++; XL.put(ws, r, 2, `${DIAS_C[d]} ${fmtDs(addDays(C.weekStart, d))}`, A); XL.put(ws, r, 3, bd[d], A); }
+  XL.grid(ws, r0 - 1, 2, r, 3);
+  // Por exportador y por cereal
+  const grp = (col, title, arr) => { let rr = r0 - 1; XL.put(ws, rr, col, title, H); XL.put(ws, rr, col + 1, "Borrados", H); arr.forEach(([k, n]) => { rr++; XL.put(ws, rr, col, k, A); XL.put(ws, rr, col + 1, n, A); }); XL.grid(ws, r0 - 1, col, rr, col + 1); };
+  grp(5, "Exportador", borrGroup(C, "exp").map(([k, n]) => [k === "Todos" ? "TODOS" : k, n]));
+  grp(7, "Cereal", borrGroup(C, "prod").map(([k, n]) => [k === "Todos" ? "TODOS" : k, n]));
+}
 async function exportExcel(){
   const btn = $("xlsBtn"); btn.disabled = true;
   try{
@@ -1633,7 +1733,7 @@ async function exportExcel(){
     let fname;
     if (S.sec === "buques"){ sheetPosibuque(wb, S.buques, "Hoja1"); fname = `POSIBUQUE 2026 (U6Y7) ${dd}.xlsx`.replace("2026", S.date.slice(0, 4)); }
     else if (S.sec === "vagones"){ sheetPosivagones(wb, S.vagones, "Hoja1"); fname = `POSIVAGONES (U6Y7) ${dd}.xlsx`; }
-    else if (S.sec === "cupos"){ sheetCupos(wb, S.cupos); fname = `CUADRO CUPOS SEM ${semanaNro(S.week)} (${fmtDs(S.week).replace("/", "-")} al ${fmtDs(addDays(S.week, nDays(S.cupos) - 1)).replace("/", "-")}).xlsx`; }
+    else if (S.sec === "cupos"){ sheetCupos(wb, S.cupos); sheetBorrados(wb, S.cupos); fname = `CUADRO CUPOS SEM ${semanaNro(S.week)} (${fmtDs(S.week).replace("/", "-")} al ${fmtDs(addDays(S.week, nDays(S.cupos) - 1)).replace("/", "-")}).xlsx`; }
     else {
       const C = resumenCupos();
       sheetPosibuque(wb, S.buques, "POSIBUQUE"); sheetPosivagones(wb, S.vagones, "POSIVAGONES"); sheetCupos(wb, C, "CUPOS SEM " + semanaNro(C.weekStart));
@@ -1963,7 +2063,10 @@ document.addEventListener("keydown", e => {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "p" && S.sec !== "listas"){ e.preventDefault(); doPrint(); }
 });
 $("page").addEventListener("input", onField);
-$("page").addEventListener("change", e => { if (e.target.tagName === "SELECT") onField(e); });
+$("page").addEventListener("change", e => {
+  if (e.target.tagName === "SELECT") onField(e);
+  if (e.target.dataset.f === "hora" && e.target.classList.contains("hora")){ const v = fmtHora(e.target.value); if (v !== e.target.value){ e.target.value = v; onField(e); } }
+});
 $("page").addEventListener("submit", onListSubmit);
 document.addEventListener("change", e => {
   if (e.target.id === "datePick" && e.target.value) setDate(e.target.value);
