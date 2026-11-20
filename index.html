@@ -197,6 +197,20 @@ table.et tfoot td{font-weight:700;background:var(--surface-2);padding:8px 6px;bo
 .borr .card-h{flex-wrap:wrap;gap:4px 12px}
 .borr select.in{min-width:98px}
 .borr .bq{font-weight:700;color:var(--danger,#c0392b)}
+.acum .card-h{flex-wrap:wrap;gap:4px 12px}
+.kpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin:2px 0 12px}
+.kpi{border:1px solid var(--line);border-radius:10px;padding:8px 10px;background:var(--surface)}
+.kpi small{display:block;color:var(--muted);font-size:.74rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em}
+.kpi b{font-size:1.25rem}
+.kpi.neg b{color:var(--danger,#c0392b)}
+.kpi.rem{border-color:var(--accent)}
+.kpi.rem b{color:var(--accent)}
+.acum .bq{color:var(--danger,#c0392b);font-weight:700}
+.acum tr.ferrow td{background:var(--feriado-soft)}
+.remant{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:10px 4px 2px;font-size:.86rem;font-weight:600}
+.remant input{width:90px}
+.remant small{color:var(--muted);font-weight:400}
+@media (max-width:640px){.kpis{grid-template-columns:repeat(3,minmax(0,1fr))}.kpi b{font-size:1.05rem}.acum .hm{display:none}.acum td input.in{width:64px}}
 .bfoot{display:grid;gap:6px;margin:12px 4px 2px;font-size:.84rem}
 .bfoot>div{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
 .bfoot small{color:var(--muted);min-width:96px;font-weight:600}
@@ -602,6 +616,8 @@ function fixCupos(o, week){
     return n;
   }).filter(e => trim(e.name) || e.products.some(p => trim(p.name) || p.values.some(v => trim(v))));
   o.borrados = (Array.isArray(o.borrados) ? o.borrados : []).map(b => Object.assign(newBorr(), b, { id: b.id || uid(), d: String(b.d ?? 0) }));
+  o.descargados = Array.from({ length:7 }, (_, i) => (o.descargados && o.descargados[i] != null) ? String(o.descargados[i]) : "");
+  o.remAnterior = o.remAnterior != null ? String(o.remAnterior) : "";
   o.feriados = Array.from({ length:7 }, (_, i) => !!(o.feriados && o.feriados[i]));
   o.domingo = !!o.domingo || o.exportadores.some(e => e.products.some(p => num(p.values[6])));
   return o;
@@ -1143,6 +1159,65 @@ function borrFootHTML(C){
   return `<div class="bfoot"><div><small>Por día</small>${Array.from({ length:nd }, (_, d) => `<span class="bchip${t[d] ? "" : " z"}">${DIAS_C[d]} <b>${fmtN(t[d])}</b></span>`).join("")}<span class="bchip tot">Semana <b>${fmtN(tot)}</b></span></div>
     <div><small>Por exportador</small>${chips(borrGroup(C, "exp"))}</div><div><small>Por cereal</small>${chips(borrGroup(C, "prod"))}</div></div>`;
 }
+/* ----- Acumulado de camiones: cupos − borrados = activados; activados − descargados = remanente ----- */
+const PREV_REM = {}; // remanente con que cerró la semana anterior, calculado (por semana)
+function cuposDia(C){ const nd = nDays(C), t = Array(nd).fill(0); prodAgg(C).forEach(a => a.t.forEach((x, i) => t[i] += x)); return t; }
+// Remanente final de una semana guardada (solo un nivel: la anterior de esa no se busca)
+function remFinal(o){
+  if (!o || !o.weekStart) return 0;
+  return acumRows(fixCupos(JSON.parse(JSON.stringify(o)), o.weekStart)).tot.rem;
+}
+function ensurePrevRem(){
+  const w = S.week; if (w in PREV_REM) return;
+  PREV_REM[w] = null;
+  loadJSON(keyC(addDays(w, -7))).then(o => { PREV_REM[w] = o ? remFinal(o) : 0; if (S.sec === "cupos" && S.week === w) refreshAcum(); }).catch(() => {});
+}
+const remInicial = C => trim(C.remAnterior) ? num(C.remAnterior) : (PREV_REM[C.weekStart] || 0);
+function acumRows(C){
+  const nd = nDays(C), cu = cuposDia(C), bd = borrPorDia(C), today = todayISO();
+  let acc = remInicial(C), last = null;
+  const rows = Array.from({ length:nd }, (_, d) => {
+    const fecha = addDays(C.weekStart, d), act = cu[d] - bd[d], des = num(C.descargados[d]);
+    const vivo = trim(C.descargados[d]) !== "" || fecha <= today; // los días que vienen no suman hasta que tengan descargados
+    let rd = null, ra = null;
+    if (vivo){ rd = act - des; acc += rd; ra = acc; last = ra; }
+    return { d, fecha, cupos:cu[d], borr:bd[d], act, des, rd, ra };
+  });
+  const sum = k => rows.reduce((a, r) => a + r[k], 0);
+  return { rows, tot:{ cupos:sum("cupos"), borr:sum("borr"), act:sum("act"), des:sum("des"), rem:last == null ? remInicial(C) : last } };
+}
+function acumKPIs(A){
+  const k = (lbl, v, cls) => `<div class="kpi${cls ? " " + cls : ""}"><small>${lbl}</small><b>${fmtN(v)}</b></div>`;
+  return k("Cupos", A.tot.cupos) + k("Borrados", A.tot.borr, "neg") + k("Activados", A.tot.act) + k("Descargados", A.tot.des) + k("Remanente", A.tot.rem, "rem");
+}
+function acumBody(C, A){
+  const fer = C.feriados, s = n => n == null ? "" : fmtN(n), neg = n => n != null && n < 0 ? ' style="color:var(--danger,#c0392b)"' : "";
+  return A.rows.map(r => `<tr class="${fer[r.d] ? "ferrow" : ""}"><td style="white-space:nowrap"><b>${DIAS_C[r.d]}</b> ${fmtDs(r.fecha)}</td><td class="n hm">${fmtN(r.cupos)}</td><td class="n bq hm">${r.borr ? fmtN(r.borr) : "0"}</td><td class="n"><b>${fmtN(r.act)}</b></td>
+    <td style="width:96px"><input class="in num" data-o="${C.weekStart}" data-f="descargados" data-i="${r.d}" value="${esc(C.descargados[r.d])}" placeholder="—" inputmode="numeric" autocomplete="off" aria-label="Descargados ${DIAS[r.d]}"></td>
+    <td class="n" id="ard-${r.d}"${neg(r.rd)}>${s(r.rd)}</td><td class="n" id="ara-${r.d}"${neg(r.ra)}><b>${s(r.ra)}</b></td></tr>`).join("");
+}
+function acumHTML(C){
+  ensurePrevRem(); REG.set(C.weekStart, C);
+  const A = acumRows(C), auto = PREV_REM[C.weekStart];
+  return `<section class="card exp acum" id="acum"><div class="card-h"><b>Acumulado de camiones</b><span class="muted" style="font-size:.84rem">Cupos y borrados salen solos del cuadro; cargá los descargados de cada día.</span></div>
+    <div class="card-b"><div class="kpis" id="acumKpi">${acumKPIs(A)}</div>
+    <div class="tw"><table class="et"><thead><tr><th>Fecha</th><th class="n hm">Cupos</th><th class="n hm">Borrados</th><th class="n">Activados</th><th class="n">Descargados</th><th class="n">Rem. del día</th><th class="n">Rem. acum.</th></tr></thead>
+      <tbody id="acumBody">${acumBody(C, A)}</tbody></table></div>
+    <label class="remant">Viene de la semana anterior <input class="in num" data-o="${C.weekStart}" data-f="remAnterior" value="${esc(C.remAnterior)}" placeholder="${auto == null ? "…" : fmtN(auto)}" inputmode="numeric" autocomplete="off" aria-label="Remanente de la semana anterior">
+      <small>${trim(C.remAnterior) ? "cargado a mano" : auto == null ? "buscando…" : "calculado de la semana " + semanaNro(addDays(C.weekStart, -7)) + " (escribí otro número para corregirlo)"}</small></label></div></section>`;
+}
+function refreshAcum(){
+  const C = S.cupos, A = acumRows(C), k = $("acumKpi"), b = $("acumBody");
+  if (!k || !b) return;
+  k.innerHTML = acumKPIs(A);
+  const a = document.activeElement;
+  if (a && b.contains(a)){ // no rehacer la fila en la que se está escribiendo
+    A.rows.forEach(r => { const rd = $("ard-" + r.d), ra = $("ara-" + r.d); if (rd){ rd.textContent = r.rd == null ? "" : fmtN(r.rd); rd.style.color = r.rd < 0 ? "var(--danger,#c0392b)" : ""; } if (ra){ ra.innerHTML = r.ra == null ? "" : `<b>${fmtN(r.ra)}</b>`; ra.style.color = r.ra < 0 ? "var(--danger,#c0392b)" : ""; } });
+  } else b.innerHTML = acumBody(C, A);
+  const rin = document.querySelector('#acum [data-f="remAnterior"]'), auto = PREV_REM[C.weekStart];
+  if (rin){ rin.placeholder = auto == null ? "…" : fmtN(auto); const sm = rin.nextElementSibling; if (sm) sm.textContent = trim(C.remAnterior) ? "cargado a mano" : auto == null ? "buscando…" : "calculado de la semana " + semanaNro(addDays(C.weekStart, -7)) + " (escribí otro número para corregirlo)"; }
+}
+
 function borradosHTML(C){
   const nd = nDays(C), list = borrSorted(C);
   const dayOpts = sel => Array.from({ length:nd }, (_, d) => `<option value="${d}"${+sel === d ? " selected" : ""}>${DIAS_C[d]} ${fmtDs(addDays(C.weekStart, d))}</option>`).join("");
@@ -1179,6 +1254,7 @@ function cuposHTML(){
   h += `<button class="add-vessel" type="button" data-act="addExp" style="margin:4px 0 6px">+ Agregar exportador</button>`;
   if (ina.length) h += `<div class="inactivos"><span>Sin cupos esta semana:</span>${ina.map(e => { reg(e); return `<button type="button" data-act="activar" data-e="${e.id}" title="Volver a activar">${esc(e.name || "sin nombre")} ↺</button>`; }).join("")}</div>`;
   h += `<div class="seclabel">Resumen de la semana</div><div id="cupSummary">${summaryHTML(C)}</div>`;
+  h += `<div class="seclabel">Acumulado de camiones</div>${acumHTML(C)}`;
   h += `<div class="seclabel">Cupos borrados</div>${borradosHTML(C)}`;
   if (ap.length) h += `<div class="seclabel">Aparte (no suman en el resumen)</div><div class="exgrid">${ap.map((e, i) => expHTML(e, nd, i, ap.length)).join("")}</div>`;
   return h;
@@ -1247,6 +1323,7 @@ function refreshCupos(el){
     }
   }
   const s = $("cupSummary"); if (s) s.innerHTML = summaryHTML(C);
+  refreshAcum();
   if (el.closest("#borr")){
     const f = $("borrFoot"); if (f) f.innerHTML = borrList(C).length ? borrFootHTML(C) : "";
     const bd = borrPorDia(C); bd.forEach((n, i) => { const t = $("btag-" + i); if (t){ t.hidden = !n; t.textContent = "−" + fmtN(n); } });
@@ -1687,41 +1764,65 @@ async function downloadWB(wb, filename){
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 4000);
 }
-function sheetBorrados(wb, C){
-  const nd = nDays(C), list = borrSorted(C).filter(b => num(b.cant) || num(b.acum));
-  if (!list.length) return;
-  const ws = wb.addWorksheet("BORRADOS SEM " + semanaNro(C.weekStart), { views:[{ showGridLines:false, state:"frozen", ySplit:3 }], pageSetup:{ orientation:"landscape", fitToPage:true, fitToWidth:1, fitToHeight:0 } });
+function sheetAcumulado(wb, C){
+  const nd = nDays(C), list = borrSorted(C).filter(b => num(b.cant) || num(b.acum)), A = acumRows(C);
+  if (!list.length && !A.tot.des && !A.tot.borr) return;
+  const ws = wb.addWorksheet("ACUMULADO SEM " + semanaNro(C.weekStart), { views:[{ showGridLines:false }], pageSetup:{ orientation:"landscape", fitToPage:true, fitToWidth:1, fitToHeight:0 } });
   const W = [12, 10, 8, 14, 22, 14, 12, 30]; W.forEach((w, i) => ws.getColumn(i + 2).width = w); ws.getColumn(1).width = 2;
   const H = { font:{ name:"Aptos", size:11, bold:true, color:{ argb:"FFFFFFFF" } }, fill:"215F9A", al:C_CENTER };
-  const A = { font:{ name:"Aptos", size:11 }, al:{ horizontal:"center", vertical:"middle" } };
-  XL.merge(ws, 1, 2, 1, 9, `CUPOS BORRADOS · SEMANA ${semanaNro(C.weekStart)} (${fmtDs(C.weekStart)} al ${fmtDs(addDays(C.weekStart, nd - 1))})`, { font:{ name:"Aptos", size:14, bold:true }, fill:"FBE3D6", al:C_CENTER });
+  const A11 = { font:{ name:"Aptos", size:11 }, al:{ horizontal:"center", vertical:"middle" } };
+  const B11 = { font:{ name:"Aptos", size:11, bold:true }, al:{ horizontal:"center", vertical:"middle" } };
+  XL.merge(ws, 1, 2, 1, 9, `ACUMULADO DE CAMIONES · SEMANA ${semanaNro(C.weekStart)} (${fmtDs(C.weekStart)} al ${fmtDs(addDays(C.weekStart, nd - 1))})`, { font:{ name:"Aptos", size:14, bold:true }, fill:"FBE3D6", al:C_CENTER });
   ws.getRow(1).height = 24;
-  ["Fecha","Día","Hora","Camiones acumulados","Exportador","Cereal","Cupos borrados","Nota"].forEach((t, i) => XL.put(ws, 3, i + 2, t, H));
+  // Tabla diaria (con fórmulas, como la hoja de cálculo)
+  ["Fecha","Cupos","Borrados","Activados","Descargados","Remanente del día","Remanente acumulado"].forEach((t, i) => XL.put(ws, 3, i + 2, t, H));
   ws.getRow(3).height = 30;
-  let r = 4;
+  XL.put(ws, 4, 2, "Anterior", { font:{ name:"Aptos", size:10, italic:true }, al:{ horizontal:"center" } });
+  XL.put(ws, 4, 8, remInicial(C), B11);
+  let r = 5; const r1 = r;
+  A.rows.forEach(x => {
+    const fer = C.feriados[x.d] ? "FFC000" : undefined;
+    XL.put(ws, r, 2, XL.dateVal(x.fecha), Object.assign({ fmt:"[$-2C0A]ddd dd/mm", fill:fer }, A11));
+    XL.put(ws, r, 3, x.cupos, Object.assign({ fill:fer }, A11));
+    XL.put(ws, r, 4, x.borr, { font:{ name:"Aptos", size:11, color:{ argb:"FFC00000" } }, al:A11.al, fill:fer });
+    XL.put(ws, r, 5, { formula:`C${r}-D${r}`, result:x.act }, Object.assign({ fill:fer }, B11));
+    if (x.rd != null){
+      XL.put(ws, r, 6, x.des, Object.assign({ fill:fer }, A11));
+      XL.put(ws, r, 7, { formula:`E${r}-F${r}`, result:x.rd }, Object.assign({ fill:fer }, A11));
+      XL.put(ws, r, 8, { formula:`H${r - 1}+G${r}`, result:x.ra }, Object.assign({ fill:fer }, B11));
+    } else for (let c = 6; c <= 8; c++) XL.put(ws, r, c, undefined, { fill:fer });
+    r++;
+  });
+  XL.put(ws, r, 2, "TOTAL", B11);
+  [3, 4, 5, 6].forEach(c => { const col = XL.col(c); XL.put(ws, r, c, { formula:`SUM(${col}${r1}:${col}${r - 1})`, result:[A.tot.cupos, A.tot.borr, A.tot.act, A.tot.des][c - 3] }, Object.assign({ fill:"C2F1C8" }, B11)); });
+  XL.put(ws, r, 8, A.tot.rem, Object.assign({ fill:"C2F1C8" }, B11));
+  XL.grid(ws, 3, 2, r, 8); XL.box(ws, 3, 2, r, 8, XL.med);
+  if (!list.length) return;
+  // Detalle de borrados
+  r += 2;
+  XL.merge(ws, r, 2, r, 9, "CUPOS BORRADOS", { font:{ name:"Aptos", size:12, bold:true }, fill:"FBE3D6", al:C_CENTER }); r++;
+  const h0 = r;
+  ["Fecha","Día","Hora","Camiones acumulados","Exportador","Cereal","Cupos borrados","Nota"].forEach((t, i) => XL.put(ws, r, i + 2, t, H));
+  ws.getRow(r).height = 30; r++;
+  const d0 = r;
   list.forEach(b => {
     const d = +b.d;
-    XL.put(ws, r, 2, XL.dateVal(addDays(C.weekStart, d)), Object.assign({ fmt:"dd/mm/yyyy" }, A));
-    XL.put(ws, r, 3, DIAS[d], A); XL.put(ws, r, 4, fmtHora(b.hora), A);
-    XL.put(ws, r, 5, trim(b.acum) ? num(b.acum) : "", A);
-    XL.put(ws, r, 6, trim(b.exp) || "TODOS", A); XL.put(ws, r, 7, prodKey(b.prod) || "TODOS", A);
-    XL.put(ws, r, 8, num(b.cant), { font:{ name:"Aptos", size:11, bold:true }, al:{ horizontal:"center", vertical:"middle" } });
+    XL.put(ws, r, 2, XL.dateVal(addDays(C.weekStart, d)), Object.assign({ fmt:"dd/mm/yyyy" }, A11));
+    XL.put(ws, r, 3, DIAS[d], A11); XL.put(ws, r, 4, fmtHora(b.hora), A11);
+    XL.put(ws, r, 5, trim(b.acum) ? num(b.acum) : "", A11);
+    XL.put(ws, r, 6, trim(b.exp) || "TODOS", A11); XL.put(ws, r, 7, prodKey(b.prod) || "TODOS", A11);
+    XL.put(ws, r, 8, num(b.cant), B11);
     XL.put(ws, r, 9, trim(b.nota), { font:{ name:"Aptos", size:11 } });
     r++;
   });
-  XL.grid(ws, 3, 2, r - 1, 9); XL.box(ws, 3, 2, r - 1, 9, XL.med);
+  XL.grid(ws, h0, 2, r - 1, 9); XL.box(ws, h0, 2, r - 1, 9, XL.med);
   XL.put(ws, r, 7, "TOTAL", { font:{ name:"Aptos", size:11, bold:true }, al:{ horizontal:"right" } });
-  XL.put(ws, r, 8, { formula:`SUM(H4:H${r - 1})`, result:list.reduce((a, b) => a + num(b.cant), 0) }, { font:{ name:"Aptos", size:11, bold:true }, fill:"C2F1C8", al:{ horizontal:"center" } });
+  XL.put(ws, r, 8, { formula:`SUM(H${d0}:H${r - 1})`, result:list.reduce((a, b) => a + num(b.cant), 0) }, Object.assign({ fill:"C2F1C8" }, B11));
   r += 2;
-  // Totales por día
-  XL.put(ws, r, 2, "Por día", H); XL.put(ws, r, 3, "Borrados", H);
-  const bd = borrPorDia(C); const r0 = r + 1;
-  for (let d = 0; d < nd; d++){ r++; XL.put(ws, r, 2, `${DIAS_C[d]} ${fmtDs(addDays(C.weekStart, d))}`, A); XL.put(ws, r, 3, bd[d], A); }
-  XL.grid(ws, r0 - 1, 2, r, 3);
-  // Por exportador y por cereal
-  const grp = (col, title, arr) => { let rr = r0 - 1; XL.put(ws, rr, col, title, H); XL.put(ws, rr, col + 1, "Borrados", H); arr.forEach(([k, n]) => { rr++; XL.put(ws, rr, col, k, A); XL.put(ws, rr, col + 1, n, A); }); XL.grid(ws, r0 - 1, col, rr, col + 1); };
-  grp(5, "Exportador", borrGroup(C, "exp").map(([k, n]) => [k === "Todos" ? "TODOS" : k, n]));
-  grp(7, "Cereal", borrGroup(C, "prod").map(([k, n]) => [k === "Todos" ? "TODOS" : k, n]));
+  const g0 = r;
+  const grp = (col, title, arr) => { let rr = g0; XL.put(ws, rr, col, title, H); XL.put(ws, rr, col + 1, "Borrados", H); arr.forEach(([k, n]) => { rr++; XL.put(ws, rr, col, k, A11); XL.put(ws, rr, col + 1, n, A11); }); XL.grid(ws, g0, col, rr, col + 1); };
+  grp(2, "Exportador", borrGroup(C, "exp").map(([k, n]) => [k === "Todos" ? "TODOS" : k, n]));
+  grp(5, "Cereal", borrGroup(C, "prod").map(([k, n]) => [k === "Todos" ? "TODOS" : k, n]));
 }
 async function exportExcel(){
   const btn = $("xlsBtn"); btn.disabled = true;
@@ -1733,7 +1834,7 @@ async function exportExcel(){
     let fname;
     if (S.sec === "buques"){ sheetPosibuque(wb, S.buques, "Hoja1"); fname = `POSIBUQUE 2026 (U6Y7) ${dd}.xlsx`.replace("2026", S.date.slice(0, 4)); }
     else if (S.sec === "vagones"){ sheetPosivagones(wb, S.vagones, "Hoja1"); fname = `POSIVAGONES (U6Y7) ${dd}.xlsx`; }
-    else if (S.sec === "cupos"){ sheetCupos(wb, S.cupos); sheetBorrados(wb, S.cupos); fname = `CUADRO CUPOS SEM ${semanaNro(S.week)} (${fmtDs(S.week).replace("/", "-")} al ${fmtDs(addDays(S.week, nDays(S.cupos) - 1)).replace("/", "-")}).xlsx`; }
+    else if (S.sec === "cupos"){ sheetCupos(wb, S.cupos); sheetAcumulado(wb, S.cupos); fname = `CUADRO CUPOS SEM ${semanaNro(S.week)} (${fmtDs(S.week).replace("/", "-")} al ${fmtDs(addDays(S.week, nDays(S.cupos) - 1)).replace("/", "-")}).xlsx`; }
     else {
       const C = resumenCupos();
       sheetPosibuque(wb, S.buques, "POSIBUQUE"); sheetPosivagones(wb, S.vagones, "POSIVAGONES"); sheetCupos(wb, C, "CUPOS SEM " + semanaNro(C.weekStart));
